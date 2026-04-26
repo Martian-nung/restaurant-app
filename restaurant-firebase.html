@@ -1,0 +1,1997 @@
+<!DOCTYPE html>
+<html lang="Thai">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>กำไร-GumRai</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Sora:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<!-- Firebase SDK -->
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+import { getFirestore, doc, setDoc, getDoc, onSnapshot, collection, deleteDoc } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+// ══════════════════════════════════════════════
+//  🔥 Firebase Config — ของคุณโดยเฉพาะ
+// ══════════════════════════════════════════════
+const firebaseConfig = {
+  apiKey: "AIzaSyD5Khyh1GKJcdaHTXGhFxpxrXoZ9W1w5BQ",
+  authDomain: "my-restaurant-9a063.firebaseapp.com",
+  projectId: "my-restaurant-9a063",
+  storageBucket: "my-restaurant-9a063.firebasestorage.app",
+  messagingSenderId: "1068998857459",
+  appId: "1:1068998857459:web:81d3b0fc81bb473859dd86"
+};
+
+const app  = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db   = getFirestore(app);
+
+// ══════════════════════════════════════════════
+//  Auth State
+// ══════════════════════════════════════════════
+let currentUser = null;
+let unsubscribeSnapshot = null;
+
+onAuthStateChanged(auth, async user => {
+  if (user) {
+    currentUser = user;
+    document.getElementById('loginScreen').style.display = 'none';
+    document.getElementById('app').style.display = 'flex';
+    document.getElementById('userEmail').textContent = user.email;
+    startFirestoreSync(user.uid);
+  } else {
+    currentUser = null;
+    if (unsubscribeSnapshot) { unsubscribeSnapshot(); unsubscribeSnapshot = null; }
+    document.getElementById('loginScreen').style.display = 'flex';
+    document.getElementById('app').style.display = 'none';
+  }
+});
+
+// ══════════════════════════════════════════════
+//  Firestore Sync — realtime listener
+// ══════════════════════════════════════════════
+function startFirestoreSync(uid) {
+  const docRef = doc(db, 'restaurants', uid);
+  unsubscribeSnapshot = onSnapshot(docRef, snap => {
+    if (snap.exists()) {
+      const data = snap.data();
+      window.state.ingredients = data.ingredients || [];
+      window.state.menuItems   = data.menuItems   || [];
+      window.state.sales       = data.sales        || [];
+      window.state.hiddenCosts = data.hiddenCosts  || [];
+    } else {
+      // New user — load sample data then save
+      window.loadSampleData();
+      window.pushToFirestore();
+    }
+    // Re-render current page
+    const active = document.querySelector('.page.active');
+    if (active) {
+      const name = active.id.replace('page-','');
+      window.showPage(name);
+    }
+    // Set dates
+    const sd = document.getElementById('saleDate');
+    const fd = document.getElementById('filterDate');
+    if (sd && !sd.value) sd.value = window.todayStr();
+    if (fd) fd.value = window.todayStr();
+  }, err => {
+    console.error('Firestore error:', err);
+    window.toast('ไม่สามารถเชื่อมต่อ database ได้', 'error');
+  });
+}
+
+// ══════════════════════════════════════════════
+//  Push state to Firestore
+// ══════════════════════════════════════════════
+window.pushToFirestore = async function() {
+  if (!currentUser) return;
+  try {
+    await setDoc(doc(db, 'restaurants', currentUser.uid), {
+      ingredients: window.state.ingredients,
+      menuItems:   window.state.menuItems,
+      sales:       window.state.sales,
+      hiddenCosts: window.state.hiddenCosts,
+      updatedAt:   new Date().toISOString()
+    });
+  } catch(e) {
+    window.toast('บันทึกไม่สำเร็จ: ' + e.message, 'error');
+  }
+};
+
+// ══════════════════════════════════════════════
+//  Auth Actions (exposed to global)
+// ══════════════════════════════════════════════
+window.doLogin = async function() {
+  const email = document.getElementById('loginEmail').value.trim();
+  const pass  = document.getElementById('loginPass').value;
+  const errEl = document.getElementById('loginError');
+  errEl.textContent = '';
+  if (!email || !pass) { errEl.textContent = 'กรุณากรอกอีเมลและรหัสผ่าน'; return; }
+  try {
+    document.getElementById('loginBtn').textContent = 'กำลังเข้าสู่ระบบ...';
+    await signInWithEmailAndPassword(auth, email, pass);
+  } catch(e) {
+    const msg = e.code === 'auth/invalid-credential' ? 'อีเมลหรือรหัสผ่านไม่ถูกต้อง'
+              : e.code === 'auth/too-many-requests'  ? 'ลองใหม่อีกครั้งในภายหลัง'
+              : e.message;
+    errEl.textContent = msg;
+    document.getElementById('loginBtn').textContent = 'เข้าสู่ระบบ';
+  }
+};
+
+window.doRegister = async function() {
+  const email = document.getElementById('loginEmail').value.trim();
+  const pass  = document.getElementById('loginPass').value;
+  const errEl = document.getElementById('loginError');
+  errEl.textContent = '';
+  if (!email || !pass) { errEl.textContent = 'กรุณากรอกอีเมลและรหัสผ่าน'; return; }
+  if (pass.length < 6) { errEl.textContent = 'รหัสผ่านต้องมีอย่างน้อย 6 ตัวอักษร'; return; }
+  try {
+    document.getElementById('registerBtn').textContent = 'กำลังสร้างบัญชี...';
+    await createUserWithEmailAndPassword(auth, email, pass);
+  } catch(e) {
+    const msg = e.code === 'auth/email-already-in-use' ? 'อีเมลนี้ถูกใช้แล้ว'
+              : e.code === 'auth/invalid-email'        ? 'รูปแบบอีเมลไม่ถูกต้อง'
+              : e.message;
+    errEl.textContent = msg;
+    document.getElementById('registerBtn').textContent = 'สร้างบัญชีใหม่';
+  }
+};
+
+window.doLogout = async function() {
+  await signOut(auth);
+  window.toast('ออกจากระบบแล้ว');
+};
+
+// Enter key on login
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('loginPass').addEventListener('keydown', e => {
+    if (e.key === 'Enter') window.doLogin();
+  });
+});
+</script>
+<style>
+/* ─── VARIABLES ─────────────────────────────────────────── */
+:root {
+  --bg:        #0f0f0f;
+  --surface:   #1a1a1a;
+  --surface2:  #222222;
+  --border:    #2e2e2e;
+  --text:      #e8e8e8;
+  --muted:     #7a7a7a;
+  --blue:      #3b82f6;
+  --blue-dim:  #1d3a5f;
+  --red:       #ef4444;
+  --red-dim:   #4c1717;
+  --green:     #22c55e;
+  --green-dim: #0f3b20;
+  --gold:      #f59e0b;
+  --gold-dim:  #3d2a05;
+  --radius:    8px;
+  --sidebar:   220px;
+  --font-body: 'Sora', sans-serif;
+  --font-mono: 'DM Mono', monospace;
+}
+[data-theme="light"] {
+  --bg:        #f5f4f0;
+  --surface:   #ffffff;
+  --surface2:  #f0ede8;
+  --border:    #ddd9d0;
+  --text:      #1a1a1a;
+  --muted:     #888;
+  --blue-dim:  #dbeafe;
+  --red-dim:   #fee2e2;
+  --green-dim: #dcfce7;
+  --gold-dim:  #fef3c7;
+}
+
+/* ─── RESET ──────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body {
+  font-family: var(--font-body);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.5;
+  transition: background .2s, color .2s;
+}
+input, select, textarea, button { font-family: inherit; font-size: inherit; }
+button { cursor: pointer; }
+a { color: inherit; text-decoration: none; }
+table { border-collapse: collapse; width: 100%; }
+
+/* ─── LAYOUT ────────────────────────────────────────────── */
+#app { display: flex; height: 100vh; overflow: hidden; }
+
+/* ─── SIDEBAR ───────────────────────────────────────────── */
+#sidebar {
+  width: var(--sidebar);
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  overflow-y: auto;
+}
+.sidebar-logo {
+  padding: 20px 16px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.sidebar-logo .brand {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -.3px;
+  color: var(--text);
+}
+.sidebar-logo .tagline {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+.nav-section {
+  padding: 12px 8px 4px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding-left: 14px;
+}
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 14px;
+  margin: 1px 8px;
+  border-radius: var(--radius);
+  color: var(--muted);
+  font-size: 13.5px;
+  font-weight: 500;
+  transition: background .15s, color .15s;
+  cursor: pointer;
+  user-select: none;
+}
+.nav-item:hover { background: var(--surface2); color: var(--text); }
+.nav-item.active { background: var(--surface2); color: var(--text); }
+.nav-item .nav-icon { font-size: 16px; width: 20px; text-align: center; }
+.sidebar-footer {
+  margin-top: auto;
+  padding: 12px 8px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.sidebar-btn {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 14px;
+  border-radius: var(--radius);
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all .15s;
+  text-align: left;
+}
+.sidebar-btn:hover { background: var(--surface2); color: var(--text); }
+.sidebar-btn.danger:hover { background: var(--red-dim); color: var(--red); }
+
+/* ─── MAIN CONTENT ──────────────────────────────────────── */
+#main {
+  flex: 1;
+  overflow-y: auto;
+  background: var(--bg);
+}
+.page { display: none; padding: 28px 32px; max-width: 1100px; margin: 0 auto; }
+.page.active { display: block; }
+.page-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  margin-bottom: 24px;
+}
+.page-title { font-size: 22px; font-weight: 700; letter-spacing: -.5px; }
+.page-subtitle { font-size: 13px; color: var(--muted); margin-top: 3px; }
+
+/* ─── KPI CARDS ─────────────────────────────────────────── */
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+  margin-bottom: 24px;
+}
+.kpi-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px 20px;
+  position: relative;
+  overflow: hidden;
+}
+.kpi-card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 3px;
+}
+.kpi-card.blue::before { background: var(--blue); }
+.kpi-card.red::before { background: var(--red); }
+.kpi-card.green::before { background: var(--green); }
+.kpi-card.gold::before { background: var(--gold); }
+.kpi-label { font-size: 11px; font-weight: 600; letter-spacing: .8px; text-transform: uppercase; color: var(--muted); }
+.kpi-value {
+  font-family: var(--font-mono);
+  font-size: 26px;
+  font-weight: 500;
+  letter-spacing: -1px;
+  margin-top: 6px;
+  line-height: 1;
+}
+.kpi-card.blue .kpi-value { color: var(--blue); }
+.kpi-card.red .kpi-value { color: var(--red); }
+.kpi-card.green .kpi-value { color: var(--green); }
+.kpi-card.gold .kpi-value { color: var(--gold); }
+.kpi-sub { font-size: 11.5px; color: var(--muted); margin-top: 4px; }
+
+/* ─── SECTION CARD ──────────────────────────────────────── */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 18px;
+}
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+}
+.card-title { font-size: 14px; font-weight: 600; }
+.card-body { padding: 16px 20px; }
+
+/* ─── TABLES ────────────────────────────────────────────── */
+.data-table th {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .8px;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+.data-table td {
+  padding: 11px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13.5px;
+  vertical-align: middle;
+}
+.data-table tr:last-child td { border-bottom: none; }
+.data-table tr:hover td { background: var(--surface2); }
+.mono { font-family: var(--font-mono); }
+.text-blue { color: var(--blue); }
+.text-red { color: var(--red); }
+.text-green { color: var(--green); }
+.text-gold { color: var(--gold); }
+.text-muted { color: var(--muted); }
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 99px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.badge-blue { background: var(--blue-dim); color: var(--blue); }
+.badge-green { background: var(--green-dim); color: var(--green); }
+.badge-red { background: var(--red-dim); color: var(--red); }
+
+/* ─── FORMS ─────────────────────────────────────────────── */
+.form-row {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.form-row.cols-3 { grid-template-columns: 2fr 1fr 1fr; }
+.form-row.cols-2 { grid-template-columns: 1fr 1fr; }
+.form-row.cols-4 { grid-template-columns: 2fr 1fr 1fr 1fr; }
+.form-group { display: flex; flex-direction: column; gap: 5px; }
+.form-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .6px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.form-input, .form-select {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 9px 12px;
+  color: var(--text);
+  font-size: 13.5px;
+  transition: border-color .15s, box-shadow .15s;
+  appearance: none;
+}
+.form-input:focus, .form-select:focus {
+  outline: none;
+  border-color: var(--blue);
+  box-shadow: 0 0 0 3px rgba(59,130,246,.15);
+}
+.form-select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%237a7a7a' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 30px;
+}
+
+/* ─── BUTTONS ───────────────────────────────────────────── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: 6px;
+  border: none;
+  font-size: 13px;
+  font-weight: 600;
+  transition: all .15s;
+  white-space: nowrap;
+}
+.btn-primary { background: var(--blue); color: #fff; }
+.btn-primary:hover { background: #2563eb; }
+.btn-danger { background: var(--red-dim); color: var(--red); }
+.btn-danger:hover { background: var(--red); color: #fff; }
+.btn-ghost {
+  background: var(--surface2);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+.btn-ghost:hover { background: var(--border); }
+.btn-sm { padding: 5px 10px; font-size: 12px; }
+.btn-icon {
+  padding: 5px 8px;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 15px;
+  border-radius: 4px;
+  transition: all .15s;
+}
+.btn-icon:hover { background: var(--surface2); color: var(--text); }
+.btn-icon.del:hover { color: var(--red); background: var(--red-dim); }
+
+/* ─── INGREDIENT TAGS ───────────────────────────────────── */
+.ingredient-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.ing-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+.ing-tag .remove-ing {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1;
+  transition: color .1s;
+}
+.ing-tag .remove-ing:hover { color: var(--red); }
+
+/* ─── CHARTS ────────────────────────────────────────────── */
+.charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-bottom: 18px; }
+canvas { display: block; }
+
+/* ─── DATE PICKER ───────────────────────────────────────── */
+.date-filter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.date-filter input[type="date"] {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 10px;
+  color: var(--text);
+  font-size: 13px;
+  font-family: var(--font-body);
+}
+.date-filter input[type="date"]:focus {
+  outline: none;
+  border-color: var(--blue);
+}
+
+/* ─── TOAST ─────────────────────────────────────────────── */
+#toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 20px;
+  font-size: 13px;
+  font-weight: 500;
+  box-shadow: 0 8px 32px rgba(0,0,0,.4);
+  transform: translateY(80px);
+  opacity: 0;
+  transition: all .25s;
+  z-index: 1000;
+  max-width: 320px;
+}
+#toast.show { transform: translateY(0); opacity: 1; }
+#toast.success { border-left: 3px solid var(--green); }
+#toast.error { border-left: 3px solid var(--red); }
+
+/* ─── MODAL ─────────────────────────────────────────────── */
+.modal-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 999;
+  display: none;
+}
+.modal-overlay.open { display: flex; }
+.modal {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 24px;
+  max-width: 400px;
+  width: 90%;
+}
+.modal-title { font-size: 16px; font-weight: 700; margin-bottom: 8px; }
+.modal-body { color: var(--muted); font-size: 13.5px; margin-bottom: 20px; }
+.modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+/* ─── EMPTY STATE ───────────────────────────────────────── */
+.empty-state {
+  text-align: center;
+  padding: 40px 20px;
+  color: var(--muted);
+}
+.empty-state .empty-icon { font-size: 36px; margin-bottom: 10px; }
+.empty-state p { font-size: 13px; }
+
+/* ─── SCROLLBAR ─────────────────────────────────────────── */
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 99px; }
+
+/* ─── RESPONSIVE ────────────────────────────────────────── */
+
+/* iPad Pro / หน้าจอใหญ่ landscape (≤1100px) */
+@media (max-width: 1100px) {
+  .page { padding: 24px 24px; }
+  .kpi-grid { grid-template-columns: repeat(4, 1fr); }
+}
+
+/* iPad / Tablet landscape+portrait (769px–1023px) */
+@media (max-width: 1023px) and (min-width: 769px) {
+  :root { --sidebar: 180px; }
+  .page { padding: 20px 20px; }
+  .kpi-grid { grid-template-columns: repeat(3, 1fr) !important; }
+  .charts-grid { grid-template-columns: 1fr 1fr; }
+  .form-row.cols-4 { grid-template-columns: 1fr 1fr; }
+  .kpi-value { font-size: 22px; }
+}
+
+/* iPad Mini / Tablet เล็ก (≤768px) */
+@media (max-width: 768px) {
+  :root { --sidebar: 56px; }
+  #sidebar { width: 56px; }
+  .sidebar-logo, .nav-section, .nav-item span, .sidebar-btn span { display: none; }
+  .nav-item { justify-content: center; padding: 10px; margin: 2px 4px; }
+  .nav-item .nav-icon { width: auto; font-size: 18px; }
+  .sidebar-footer { padding: 8px 4px; }
+  .sidebar-btn { justify-content: center; padding: 8px; }
+  .page { padding: 18px 14px; }
+  .page-header { flex-direction: column; align-items: flex-start; gap: 10px; }
+  .kpi-grid { grid-template-columns: repeat(2, 1fr) !important; gap: 10px; }
+  .charts-grid { grid-template-columns: 1fr; }
+  .form-row.cols-3 { grid-template-columns: 1fr 1fr; }
+  .form-row.cols-4 { grid-template-columns: 1fr 1fr; }
+  .form-row.cols-2 { grid-template-columns: 1fr; }
+  .card-header { flex-direction: column; align-items: flex-start; gap: 8px; }
+  .date-filter { flex-wrap: wrap; }
+}
+
+/* iPhone Plus / มือถือจอใหญ่ (481px–599px) */
+@media (max-width: 599px) and (min-width: 481px) {
+  .kpi-value { font-size: 20px; }
+  .form-row.cols-3,
+  .form-row.cols-4 { grid-template-columns: 1fr 1fr; }
+  .page { padding: 14px 12px; }
+  .data-table th, .data-table td { padding: 8px 8px; font-size: 12.5px; }
+}
+
+/* iPhone / มือถือทั่วไป (≤480px) */
+@media (max-width: 480px) {
+  .kpi-grid { grid-template-columns: 1fr 1fr; gap: 8px; }
+  .kpi-card { padding: 14px 14px; }
+  .kpi-value { font-size: 18px; }
+  .kpi-label { font-size: 10px; }
+  .form-row.cols-3,
+  .form-row.cols-4,
+  .form-row.cols-2 { grid-template-columns: 1fr; }
+  .page { padding: 12px 10px; }
+  .page-title { font-size: 18px; }
+  .data-table th, .data-table td { padding: 7px 6px; font-size: 12px; }
+  .data-table th:nth-child(4), .data-table td:nth-child(4) { display: none; }
+  .card-body { padding: 12px 12px; }
+  .btn { padding: 7px 12px; font-size: 12.5px; }
+  .summary-row { gap: 10px; }
+  #toast { left: 12px; right: 12px; bottom: 12px; max-width: 100%; }
+}
+
+/* iPhone SE / จอเล็กมาก (≤375px) */
+@media (max-width: 375px) {
+  .kpi-grid { grid-template-columns: 1fr 1fr; gap: 6px; }
+  .kpi-value { font-size: 16px; }
+  .page { padding: 10px 8px; }
+  .data-table th:nth-child(5), .data-table td:nth-child(5) { display: none; }
+}
+
+/* ─── PROFIT MARGIN BAR ─────────────────────────────────── */
+.margin-bar {
+  height: 4px;
+  background: var(--border);
+  border-radius: 99px;
+  margin-top: 6px;
+  overflow: hidden;
+}
+.margin-fill { height: 100%; background: var(--green); border-radius: 99px; transition: width .4s; }
+
+/* ─── SUMMARY ROW ───────────────────────────────────────── */
+.summary-row {
+  display: flex;
+  gap: 16px;
+  background: var(--surface2);
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  margin-top: 12px;
+  font-size: 13px;
+  flex-wrap: wrap;
+}
+.summary-item { display: flex; flex-direction: column; gap: 2px; }
+.summary-item .s-label { font-size: 10px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); font-weight: 600; }
+.summary-item .s-val { font-family: var(--font-mono); font-weight: 500; font-size: 15px; }
+/* ─── LOGIN SCREEN ──────────────────────────────────────── */
+#loginScreen {
+  position: fixed; inset: 0;
+  background: var(--bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  flex-direction: column;
+}
+.login-box {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 36px 32px;
+  width: 360px;
+  max-width: 90vw;
+}
+.login-logo { font-size: 28px; font-weight: 700; margin-bottom: 6px; }
+.login-sub  { font-size: 13px; color: var(--muted); margin-bottom: 28px; }
+.login-field { display: flex; flex-direction: column; gap: 5px; margin-bottom: 14px; }
+.login-field label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); }
+.login-error { color: var(--red); font-size: 12.5px; min-height: 18px; margin-bottom: 6px; }
+.login-actions { display: flex; gap: 8px; }
+.login-actions .btn { flex: 1; justify-content: center; }
+.login-divider { text-align:center; color:var(--muted); font-size:11px; margin: 14px 0 0; }
+</style>
+</head>
+<body>
+
+<!-- ─── LOGIN SCREEN ───────────────────────────────────── -->
+<div id="loginScreen" style="display:none">
+  <div class="login-box">
+    <div class="login-logo">🍽 GumRai</div>
+    <div class="login-sub">ระบบคำนวณต้นทุน-กำไรร้านอาหาร</div>
+    <div class="login-field">
+      <label>อีเมล</label>
+      <input type="email" class="form-input" id="loginEmail" placeholder="your@email.com" autocomplete="email">
+    </div>
+    <div class="login-field">
+      <label>รหัสผ่าน</label>
+      <input type="password" class="form-input" id="loginPass" placeholder="••••••••" autocomplete="current-password">
+    </div>
+    <div class="login-error" id="loginError"></div>
+    <div class="login-actions">
+      <button class="btn btn-primary" id="loginBtn" onclick="doLogin()">เข้าสู่ระบบ</button>
+      <button class="btn btn-ghost" id="registerBtn" onclick="doRegister()">สร้างบัญชีใหม่</button>
+    </div>
+    <div class="login-divider">สร้างบัญชีแยกกันสำหรับเจ้าของและพนักงานแต่ละคน</div>
+  </div>
+</div>
+
+<div id="app" style="display:none">
+
+  <!-- ─── SIDEBAR ─────────────────────────────────────── -->
+  <nav id="sidebar">
+    <div class="sidebar-logo">
+      <div class="brand">🍽 RestaurantLedger</div>
+    </div>
+
+    <div class="nav-section">Main</div>
+    <div class="nav-item active" onclick="showPage('dashboard')">
+      <span class="nav-icon">📊</span><span>หน้าหลัก</span>
+    </div>
+    <div class="nav-item" onclick="showPage('sales')">
+      <span class="nav-icon">💰</span><span>ยอดขายประจำวัน</span>
+    </div>
+
+    <div class="nav-section">Setup</div>
+    <div class="nav-item" onclick="showPage('menu')">
+      <span class="nav-icon">📋</span><span>เพิ่มเมนู</span>
+    </div>
+    <div class="nav-item" onclick="showPage('ingredients')">
+      <span class="nav-icon">🧂</span><span>วัตถุดิบ</span>
+    </div>
+    <div class="nav-item" onclick="showPage('hiddencosts')">
+      <span class="nav-icon">💸</span><span>ต้นทุนแฝง</span>
+    </div>
+
+    <div class="sidebar-footer">
+      <div style="padding:6px 14px;font-size:11px;color:var(--muted);word-break:break-all" id="userEmail"></div>
+      <button class="sidebar-btn" onclick="exportData()">
+        <span>⬇</span><span>Export JSON</span>
+      </button>
+      <label class="sidebar-btn" style="cursor:pointer">
+        <span>⬆</span><span>Import JSON</span>
+        <input type="file" id="importFile" accept=".json" style="display:none" onchange="importData(event)">
+      </label>
+      <button class="sidebar-btn" onclick="toggleTheme()">
+        <span id="themeIcon">☀️</span><span>Theme</span>
+      </button>
+      <button class="sidebar-btn danger" onclick="confirmReset()">
+        <span>🗑</span><span>รีเซ็ตข้อมูล</span>
+      </button>
+      <button class="sidebar-btn danger" onclick="doLogout()">
+        <span>🚪</span><span>ออกจากระบบ</span>
+      </button>
+    </div>
+  </nav>
+
+  <!-- ─── MAIN ──────────────────────────────────────────── -->
+  <main id="main">
+
+    <!-- DASHBOARD -->
+    <section class="page active" id="page-dashboard">
+      <div class="page-header">
+        <div>
+          <div class="page-title">ภาพรวม</div>
+          <div class="page-subtitle" id="dashDate"></div>
+        </div>
+        <div class="date-filter">
+          <label style="font-size:12px;color:var(--muted);font-weight:600">เลือกวันที่</label>
+          <input type="date" id="filterDate" onchange="renderDashboard()">
+          <button class="btn btn-ghost btn-sm" onclick="clearFilter()">แสดงทั้งหมด</button>
+        </div>
+      </div>
+
+      <!-- KPI -->
+      <div class="kpi-grid" style="grid-template-columns:repeat(5,1fr)">
+        <div class="kpi-card blue">
+          <div class="kpi-label">ยอดขายทั้งหมด</div>
+          <div class="kpi-value" id="kpiRevenue">฿0</div>
+          <div class="kpi-sub" id="kpiRevSub">—</div>
+        </div>
+        <div class="kpi-card red">
+          <div class="kpi-label">ต้นทุนวัตถุดิบ</div>
+          <div class="kpi-value" id="kpiCost">฿0</div>
+          <div class="kpi-sub" id="kpiCostSub">—</div>
+        </div>
+        <div class="kpi-card green">
+          <div class="kpi-label">กำไรขั้นต้น</div>
+          <div class="kpi-value" id="kpiProfit">฿0</div>
+          <div class="kpi-sub" id="kpiMarginSub">—</div>
+        </div>
+        <div class="kpi-card" style="border-top:3px solid var(--gold)">
+          <div class="kpi-label">กำไรสุทธิ (หลังต้นทุนแฝง)</div>
+          <div class="kpi-value mono" id="kpiNetProfit" style="color:var(--green);font-size:22px">฿0</div>
+          <div class="kpi-sub" id="kpiNetSub">—</div>
+        </div>
+        <div class="kpi-card gold">
+          <div class="kpi-label">จำนวนออเดอร์</div>
+          <div class="kpi-value" id="kpiOrders">0</div>
+          <div class="kpi-sub" id="kpiOrdersSub">—</div>
+        </div>
+      </div>
+
+      <!-- Charts -->
+      <div class="charts-grid">
+        <div class="card">
+          <div class="card-header"><div class="card-title">เมนูขายดี</div></div>
+          <div class="card-body" style="padding:12px 16px">
+            <canvas id="barChart" height="200"></canvas>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-header"><div class="card-title">สัดส่วนต้นทุน กำไร</div></div>
+          <div class="card-body" style="padding:12px 16px;display:flex;align-items:center;justify-content:center">
+            <canvas id="pieChart" height="200" width="200"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <!-- Sales Table -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">รายละเอียด</div>
+        </div>
+        <div id="dashSalesTable"></div>
+      </div>
+    </section>
+
+    <!-- DAILY SALES -->
+    <section class="page" id="page-sales">
+      <div class="page-header">
+        <div>
+          <div class="page-title">ยอดขายประจำวัน</div>
+          <div class="page-subtitle">บันทึกยอดขายวันนี้</div>
+        </div>
+      </div>
+
+      <!-- Add Sale Form -->
+      <div class="card" style="margin-bottom:18px">
+        <div class="card-header"><div class="card-title">เพิ่มรายการขาย</div></div>
+        <div class="card-body">
+          <div class="form-row cols-4">
+            <div class="form-group">
+              <label class="form-label">วันที่</label>
+              <input type="date" class="form-input" id="saleDate">
+            </div>
+            <div class="form-group">
+              <label class="form-label">ชื่อเมนู</label>
+              <select class="form-select" id="saleMenu"></select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">จำนวนออเดอร์</label>
+              <input type="number" class="form-input" id="saleQty" min="1" placeholder="1">
+            </div>
+            <div class="form-group" style="justify-content:flex-end;padding-top:19px">
+              <button class="btn btn-primary" onclick="addSale()">＋ เพิ่ม</button>
+            </div>
+          </div>
+          <div id="saleSummary" class="summary-row" style="display:none"></div>
+        </div>
+      </div>
+
+      <!-- Sales List -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">สรุปยอดขาย</div>
+          <div class="date-filter">
+            <input type="date" id="salesFilterDate">
+            <button class="btn btn-ghost btn-sm" onclick="clearSalesFilter()">แสดงทั้งหมด</button>
+          </div>
+        </div>
+        <div id="salesTable"></div>
+      </div>
+    </section>
+
+    <!-- เมนู -->
+    <section class="page" id="page-menu">
+      <div class="page-header">
+      </div>
+
+      <!-- Add/Edit Menu Form -->
+      <div class="card" style="margin-bottom:18px">
+        <div class="card-header">
+          <div class="card-title" id="menuFormTitle">องค์ประกอบเมนู</div>
+        </div>
+        <div class="card-body">
+          <div class="form-row cols-2">
+            <div class="form-group">
+              <label class="form-label">ชื่อเมนู</label>
+              <input type="text" class="form-input" id="menuName" placeholder="">
+            </div>
+            <div class="form-group">
+              <label class="form-label">ราคาขาย (฿)</label>
+              <input type="number" class="form-input" id="menuPrice" placeholder="0.00" min="0" step="0.01">
+            </div>
+          </div>
+
+          <!-- Ingredient Selector -->
+          <div class="form-group" style="margin-bottom:10px">
+            <label class="form-label">เลือกวัตถุดิบ</label>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <select class="form-select" id="ingSelect" style="flex:2;min-width:140px"></select>
+              <input type="number" class="form-input" id="ingQty" placeholder="Qty" min="0" step="0.001" style="width:100px">
+              <button class="btn btn-ghost" onclick="addIngToMenu()">＋ เพิ่ม</button>
+            </div>
+            <div class="ingredient-list" id="menuIngList"></div>
+          </div>
+
+          <div style="display:flex;align-items:center;gap:12px;margin-top:4px">
+            <button class="btn btn-primary" onclick="saveMenuItem()">บันทึก</button>
+            <button class="btn btn-ghost" onclick="cancelMenuEdit()" id="cancelMenuBtn" style="display:none">ยกเลิก</button>
+            <span style="font-size:13px;color:var(--muted)">ต้นทุนวัตถุดิบ/จาน: <span class="mono text-red" id="menuCostPreview">฿0.00</span></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Menu List -->
+      <div class="card">
+        <div class="card-header"><div class="card-title">เมนูและองค์ประกอบ</div></div>
+        <div id="menuTable"></div>
+      </div>
+    </section>
+
+    <!-- INGREDIENTS -->
+    <section class="page" id="page-ingredients">
+      <div class="page-header">
+        <div>
+         
+        </div>
+      </div>
+
+      <!-- Add Form -->
+      <div class="card" style="margin-bottom:18px">
+        <div class="card-header">
+          <div class="card-title" id="ingFormTitle">เพิ่มรายการวัตถุดิบ</div>
+        </div>
+        <div class="card-body">
+          <div class="form-row cols-3">
+            <div class="form-group">
+              <label class="form-label">ชื่อวัตถุดิบ</label>
+              <input type="text" class="form-input" id="ingName" placeholder="e.g. เนื้อไก่">
+            </div>
+            <div class="form-group">
+              <label class="form-label">ราคา/หน่วย (฿)</label>
+              <input type="number" class="form-input" id="ingCost" placeholder="0.00" min="0" step="0.01">
+            </div>
+            <div class="form-group">
+              <label class="form-label">หน่วย</label>
+              <select class="form-select" id="ingUnit">
+                <option>kg</option><option>g</option><option>L</option><option>mL</option>
+                <option>piece</option><option>pack</option><option>bunch</option>
+                <option>tbsp</option><option>tsp</option><option>cup</option>
+              </select>
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;margin-top:4px">
+            <button class="btn btn-primary" onclick="saveIngredient()">บันทึก</button>
+            <button class="btn btn-ghost" onclick="cancelIngEdit()" id="cancelIngBtn" style="display:none">ยกเลิก</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Ingredients List -->
+      <div class="card">
+        <div class="card-header"><div class="card-title">วัตถุดิบทั้งหมด</div></div>
+        <div id="ingredientTable"></div>
+      </div>
+    </section>
+
+    <!-- HIDDEN COSTS -->
+    <section class="page" id="page-hiddencosts">
+      <div class="page-header">
+        <div>
+          <div class="page-title">ต้นทุนแฝง</div>
+          <div class="page-subtitle">ค่าใช้จ่ายอื่นๆ นอกจากวัตถุดิบ เช่น ค่าเช่า ค่าไฟ ค่าแรง</div>
+        </div>
+      </div>
+
+      <!-- Add Form -->
+      <div class="card" style="margin-bottom:18px">
+        <div class="card-header">
+          <div class="card-title" id="hcFormTitle">เพิ่มต้นทุนแฝง</div>
+        </div>
+        <div class="card-body">
+          <div class="form-row cols-3">
+            <div class="form-group">
+              <label class="form-label">ชื่อรายการ</label>
+              <input type="text" class="form-input" id="hcName" placeholder="เช่น ค่าเช่าร้าน, ค่าไฟ">
+            </div>
+            <div class="form-group">
+              <label class="form-label">จำนวนเงิน (฿)</label>
+              <input type="number" class="form-input" id="hcAmount" placeholder="0.00" min="0" step="0.01">
+            </div>
+            <div class="form-group">
+              <label class="form-label">ประเภท</label>
+              <select class="form-select" id="hcType">
+                <option value="daily">รายวัน</option>
+                <option value="monthly">รายเดือน (÷30)</option>
+                <option value="fixed">ค่าใช้จ่ายคงที่/ครั้ง</option>
+              </select>
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;margin-top:4px">
+            <button class="btn btn-primary" onclick="saveHiddenCost()">บันทึก</button>
+            <button class="btn btn-ghost" onclick="cancelHcEdit()" id="cancelHcBtn" style="display:none">ยกเลิก</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Summary -->
+      <div class="card" style="margin-bottom:18px" id="hcSummaryCard">
+        <div class="card-header"><div class="card-title">สรุปต้นทุนแฝงต่อวัน</div></div>
+        <div class="card-body">
+          <div id="hcSummary" style="display:flex;gap:24px;flex-wrap:wrap"></div>
+        </div>
+      </div>
+
+      <!-- List -->
+      <div class="card">
+        <div class="card-header"><div class="card-title">รายการต้นทุนแฝงทั้งหมด</div></div>
+        <div id="hcTable"></div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<!-- ─── TOAST ────────────────────────────────────────────── -->
+<div id="toast"></div>
+
+<!-- ─── CONFIRM MODAL ─────────────────────────────────────── -->
+<div class="modal-overlay" id="confirmModal">
+  <div class="modal">
+    <div class="modal-title" id="confirmTitle">ยืนยันการดำเนินการ?</div>
+    <div class="modal-body" id="confirmBody">การกระทำนี้ไม่สามารถย้อนกลับได้</div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeConfirm()">ยกเลิก</button>
+      <button class="btn btn-danger" id="confirmOkBtn">ลบ</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════
+   STATE & STORAGE
+═══════════════════════════════════════════════════════════ */
+let state = {
+  ingredients:  [],   // { id, name, cost, unit }
+  menuItems:    [],   // { id, name, price, ingredients:[{id,qty}] }
+  sales:        [],   // { id, date, menuId, qty }
+  hiddenCosts:  []    // { id, name, amount, type:'daily'|'monthly'|'fixed' }
+};
+
+let editingIngId  = null;
+let editingMenuId = null;
+let tempMenuIngs  = [];  // [{id, qty}] while editing menu form
+
+const STORAGE_KEY = 'restaurantLedger_v2';
+
+function loadState() {
+  // State is loaded via Firestore onSnapshot — nothing to do here
+  if (!state.hiddenCosts) state.hiddenCosts = [];
+}
+
+function saveState() {
+  // Push to Firestore (defined in module script above)
+  if (window.pushToFirestore) window.pushToFirestore();
+}
+
+function uid() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2,7);
+}
+
+/* ─── SAMPLE DATA ─────────────────────────────────────── */
+function loadSampleData() {
+  const i1 = uid(), i2 = uid(), i3 = uid(), i4 = uid(), i5 = uid();
+  state.ingredients = [
+    { id: i1, name: 'Rice Noodles',   cost: 15,  unit: 'kg' },
+    { id: i2, name: 'Chicken Breast', cost: 85,  unit: 'kg' },
+    { id: i3, name: 'Eggs',           cost: 5,   unit: 'piece' },
+    { id: i4, name: 'Coconut Milk',   cost: 35,  unit: 'L' },
+    { id: i5, name: 'Lime',           cost: 3,   unit: 'piece' },
+  ];
+  const m1 = uid(), m2 = uid(), m3 = uid(), m4 = uid();
+  state.menuItems = [
+    { id: m1, name: 'Pad Thai',       price: 80,  ingredients: [{id:i1,qty:0.2},{id:i2,qty:0.15},{id:i3,qty:2}] },
+    { id: m2, name: 'Green Curry',    price: 90,  ingredients: [{id:i2,qty:0.2},{id:i4,qty:0.3},{id:i5,qty:1}] },
+    { id: m3, name: 'Fried Rice',     price: 65,  ingredients: [{id:i1,qty:0.2},{id:i2,qty:0.1},{id:i3,qty:2}] },
+    { id: m4, name: 'Tom Yum Soup',   price: 75,  ingredients: [{id:i2,qty:0.1},{id:i4,qty:0.2},{id:i5,qty:2}] },
+  ];
+  // Generate 7 days of sales
+  const today = new Date();
+  for (let d = 6; d >= 0; d--) {
+    const date = new Date(today); date.setDate(today.getDate() - d);
+    const ds = date.toISOString().slice(0,10);
+    state.menuItems.forEach(m => {
+      const qty = Math.floor(Math.random()*12)+2;
+      state.sales.push({ id: uid(), date: ds, menuId: m.id, qty });
+    });
+  }
+  saveState();
+}
+
+/* ═══════════════════════════════════════════════════════════
+   NAVIGATION
+═══════════════════════════════════════════════════════════ */
+function showPage(name) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById('page-' + name).classList.add('active');
+  document.querySelectorAll('.nav-item').forEach(n => {
+    if (n.getAttribute('onclick')?.includes(name)) n.classList.add('active');
+  });
+  if (name === 'dashboard')   renderDashboard();
+  if (name === 'sales')       renderSalesPage();
+  if (name === 'menu')        renderMenuPage();
+  if (name === 'ingredients') renderIngredientsPage();
+  if (name === 'hiddencosts') renderHiddenCostsPage();
+}
+
+/* ═══════════════════════════════════════════════════════════
+   HELPERS
+═══════════════════════════════════════════════════════════ */
+const fmt = n => '฿' + (+n).toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2});
+const todayStr = () => new Date().toISOString().slice(0,10);
+const today = todayStr; // alias
+
+// Expose to module script
+window.state        = state;
+window.showPage     = (...a) => showPage(...a);
+window.loadSampleData = (...a) => loadSampleData(...a);
+window.todayStr     = todayStr;
+window.toast        = (...a) => toast(...a);
+
+/** Calculate ingredient cost for a menu item */
+function menuItemCost(item) {
+  return item.ingredients.reduce((sum, ing) => {
+    const ingData = state.ingredients.find(i => i.id === ing.id);
+    return sum + (ingData ? ingData.cost * ing.qty : 0);
+  }, 0);
+}
+
+/** Calculate total hidden cost per day */
+function dailyHiddenCost() {
+  if (!state.hiddenCosts) return 0;
+  return state.hiddenCosts.reduce((sum, hc) => {
+    if (hc.type === 'daily')   return sum + hc.amount;
+    if (hc.type === 'monthly') return sum + hc.amount / 30;
+    if (hc.type === 'fixed')   return sum + hc.amount;
+    return sum;
+  }, 0);
+}
+
+/** Get sales filtered by date (or all if null) */
+function filteredSales(dateStr) {
+  if (!dateStr) return state.sales;
+  return state.sales.filter(s => s.date === dateStr);
+}
+
+/** Aggregate sales rows into per-menu summary */
+function aggregateSales(sales) {
+  const map = {};
+  sales.forEach(s => {
+    if (!map[s.menuId]) map[s.menuId] = { menuId: s.menuId, qty: 0 };
+    map[s.menuId].qty += s.qty;
+  });
+  return Object.values(map).map(row => {
+    const menu = state.menuItems.find(m => m.id === row.menuId);
+    if (!menu) return null;
+    const cost = menuItemCost(menu);
+    const revenue = menu.price * row.qty;
+    const totalCost = cost * row.qty;
+    return { ...row, menu, revenue, totalCost, profit: revenue - totalCost };
+  }).filter(Boolean);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   DASHBOARD
+═══════════════════════════════════════════════════════════ */
+function renderDashboard() {
+  const df = document.getElementById('filterDate').value || null;
+  const sales = filteredSales(df);
+  const rows = aggregateSales(sales);
+
+  const totalRevenue = rows.reduce((s,r) => s + r.revenue, 0);
+  const totalCost    = rows.reduce((s,r) => s + r.totalCost, 0);
+  const totalProfit  = totalRevenue - totalCost;
+  const totalOrders  = rows.reduce((s,r) => s + r.qty, 0);
+  const margin       = totalRevenue > 0 ? (totalProfit/totalRevenue*100) : 0;
+
+  // Hidden costs: if date filter → 1 day, else number of unique days
+  let uniqueDays = 1;
+  if (!df) {
+    const daySet = new Set(state.sales.map(s => s.date));
+    uniqueDays = Math.max(daySet.size, 1);
+  }
+  const totalHidden  = dailyHiddenCost() * uniqueDays;
+  const netProfit    = totalProfit - totalHidden;
+  const netMargin    = totalRevenue > 0 ? (netProfit/totalRevenue*100) : 0;
+  const hasHidden    = totalHidden > 0;
+
+  document.getElementById('kpiRevenue').textContent = fmt(totalRevenue);
+  document.getElementById('kpiCost').textContent    = fmt(totalCost);
+  document.getElementById('kpiProfit').textContent  = fmt(totalProfit);
+  document.getElementById('kpiOrders').textContent  = totalOrders;
+  document.getElementById('kpiRevSub').textContent  = df ? `วันที่ ${df}` : 'ทั้งหมด';
+  document.getElementById('kpiCostSub').textContent = `${(totalRevenue > 0 ? totalCost/totalRevenue*100 : 0).toFixed(1)}% ของยอดขาย`;
+  document.getElementById('kpiMarginSub').textContent = `${margin.toFixed(1)}% อัตรากำไร (เฉพาะวัตถุดิบ)`;
+  document.getElementById('kpiOrdersSub').textContent = `${state.menuItems.length} เมนู`;
+  document.getElementById('dashDate').textContent = df ? `แสดง: ${df}` : `แสดง: ทั้งหมด · ${state.sales.length} รายการ`;
+
+  // Net profit card
+  const netCard = document.getElementById('kpiNetProfit');
+  if (netCard) {
+    netCard.textContent = fmt(netProfit);
+    netCard.style.color = netProfit >= 0 ? 'var(--green)' : 'var(--red)';
+    document.getElementById('kpiNetSub').textContent = hasHidden
+      ? `${netMargin.toFixed(1)}% หลังหักต้นทุนแฝง ${fmt(totalHidden)}`
+      : 'ยังไม่ได้ตั้งต้นทุนแฝง';
+  }
+
+  renderBarChart(rows);
+  renderPieChart(totalCost, totalProfit, totalHidden);
+  renderDashSalesTable(rows, totalHidden, uniqueDays);
+}
+
+function renderDashSalesTable(rows, totalHidden, uniqueDays) {
+  const sorted = [...rows].sort((a,b) => b.qty - a.qty);
+  if (!sorted.length) {
+    document.getElementById('dashSalesTable').innerHTML = emptyState('ยังไม่มีข้อมูลยอดขาย');
+    return;
+  }
+  const hasHidden = totalHidden > 0;
+  // Distribute hidden costs proportionally by revenue
+  const totalRevAll = sorted.reduce((s,r) => s + r.revenue, 0);
+
+  document.getElementById('dashSalesTable').innerHTML = `
+    <table class="data-table">
+      <thead><tr>
+        <th>เมนู</th><th>จำนวน</th><th>ยอดขาย</th><th>ต้นทุนวัตถุดิบ</th>
+        ${hasHidden ? '<th>ต้นทุนแฝง</th>' : ''}
+        <th>กำไรขั้นต้น</th>
+        ${hasHidden ? '<th>กำไรสุทธิ</th>' : ''}
+        <th>อัตรากำไร</th>
+      </tr></thead>
+      <tbody>
+        ${sorted.map(r => {
+          const mg = r.revenue > 0 ? r.profit/r.revenue*100 : 0;
+          const hiddenShare = totalRevAll > 0 ? totalHidden * (r.revenue / totalRevAll) : 0;
+          const netProfit = r.profit - hiddenShare;
+          const netMg = r.revenue > 0 ? netProfit/r.revenue*100 : 0;
+          return `<tr>
+            <td>${r.menu.name}</td>
+            <td><span class="badge badge-blue mono">${r.qty}</span></td>
+            <td class="mono text-blue">${fmt(r.revenue)}</td>
+            <td class="mono text-red">${fmt(r.totalCost)}</td>
+            ${hasHidden ? `<td class="mono" style="color:var(--gold)">${fmt(hiddenShare)}</td>` : ''}
+            <td class="mono text-green">${fmt(r.profit)}</td>
+            ${hasHidden ? `<td class="mono" style="color:${netProfit>=0?'var(--green)':'var(--red)'}">${fmt(netProfit)}</td>` : ''}
+            <td>
+              <span style="font-size:12px;color:var(--muted)">${mg.toFixed(1)}%${hasHidden ? ` / <span style="color:${netMg>=0?'var(--green)':'var(--red)'}">${netMg.toFixed(1)}%</span>` : ''}</span>
+              <div class="margin-bar"><div class="margin-fill" style="width:${Math.max(0,mg)}%"></div></div>
+            </td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>
+    ${hasHidden ? `<div style="padding:10px 16px;font-size:11.5px;color:var(--muted)">* อัตรากำไร: <b style="color:var(--muted)">ขั้นต้น (วัตถุดิบ)</b> / <b style="color:var(--green)">สุทธิ (หลังต้นทุนแฝง)</b> — ต้นทุนแฝงกระจายตามสัดส่วนรายได้</div>` : ''}`;
+}
+
+function clearFilter() {
+  document.getElementById('filterDate').value = '';
+  renderDashboard();
+}
+
+/* ═══════════════════════════════════════════════════════════
+   CHARTS (Pure Canvas — no libraries)
+═══════════════════════════════════════════════════════════ */
+function getColors() {
+  const s = getComputedStyle(document.documentElement);
+  return {
+    blue:   s.getPropertyValue('--blue').trim(),
+    red:    s.getPropertyValue('--red').trim(),
+    green:  s.getPropertyValue('--green').trim(),
+    gold:   s.getPropertyValue('--gold').trim(),
+    muted:  s.getPropertyValue('--muted').trim(),
+    border: s.getPropertyValue('--border').trim(),
+    text:   s.getPropertyValue('--text').trim(),
+    bg:     s.getPropertyValue('--surface2').trim(),
+  };
+}
+
+function renderBarChart(rows) {
+  const canvas = document.getElementById('barChart');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.offsetWidth || 400;
+  const H = 200;
+  canvas.width = W; canvas.height = H;
+  ctx.clearRect(0,0,W,H);
+  if (!rows.length) {
+    ctx.fillStyle = getColors().muted;
+    ctx.font = '13px Sora,sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('No data', W/2, H/2);
+    return;
+  }
+  const C = getColors();
+  const sorted = [...rows].sort((a,b) => b.qty - a.qty).slice(0,8);
+  const maxQty = Math.max(...sorted.map(r => r.qty));
+  const pad = { top: 20, right: 16, bottom: 40, left: 46 };
+  const chartW = W - pad.left - pad.right;
+  const chartH = H - pad.top - pad.bottom;
+  const barW = Math.max(14, (chartW / sorted.length) * 0.6);
+  const gap = chartW / sorted.length;
+
+  // Grid lines
+  for (let i = 0; i <= 4; i++) {
+    const y = pad.top + (chartH / 4) * i;
+    ctx.strokeStyle = C.border;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3,3]);
+    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(W - pad.right, y); ctx.stroke();
+    ctx.fillStyle = C.muted;
+    ctx.font = '10px DM Mono,monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText(Math.round(maxQty - (maxQty/4)*i), pad.left - 6, y + 3);
+  }
+  ctx.setLineDash([]);
+
+  // Bars
+  sorted.forEach((r, i) => {
+    const barH = maxQty > 0 ? (r.qty / maxQty) * chartH : 0;
+    const x = pad.left + gap * i + (gap - barW) / 2;
+    const y = pad.top + chartH - barH;
+
+    // Revenue bar (background)
+    ctx.fillStyle = C.blue + '33';
+    ctx.beginPath();
+    roundRect(ctx, x, pad.top, barW, chartH, 4);
+    ctx.fill();
+
+    // Qty bar
+    ctx.fillStyle = C.blue;
+    ctx.beginPath();
+    roundRect(ctx, x, y, barW, barH, 4);
+    ctx.fill();
+
+    // Label
+    ctx.fillStyle = C.muted;
+    ctx.font = '10px Sora,sans-serif';
+    ctx.textAlign = 'center';
+    const label = r.menu.name.length > 10 ? r.menu.name.slice(0,9)+'…' : r.menu.name;
+    ctx.fillText(label, x + barW/2, H - pad.bottom + 14);
+    ctx.fillStyle = C.text;
+    ctx.font = 'bold 10px DM Mono,monospace';
+    ctx.fillText(r.qty, x + barW/2, y - 4);
+  });
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.moveTo(x+r, y);
+  ctx.lineTo(x+w-r, y); ctx.arcTo(x+w,y,x+w,y+r,r);
+  ctx.lineTo(x+w,y+h-r); ctx.arcTo(x+w,y+h,x+w-r,y+h,r);
+  ctx.lineTo(x+r,y+h); ctx.arcTo(x,y+h,x,y+h-r,r);
+  ctx.lineTo(x,y+r); ctx.arcTo(x,y,x+r,y,r);
+  ctx.closePath();
+}
+
+function renderPieChart(totalCost, totalProfit, totalHidden) {
+  const canvas = document.getElementById('pieChart');
+  const ctx = canvas.getContext('2d');
+  const size = Math.min(canvas.offsetWidth, 200) || 200;
+  canvas.width = size; canvas.height = size;
+  ctx.clearRect(0,0,size,size);
+  const C = getColors();
+  const cx = size/2, cy = size/2, r = size/2 - 20;
+  const netProfit = totalProfit - (totalHidden || 0);
+  const total = totalCost + (totalHidden || 0) + Math.max(netProfit, 0);
+
+  if (total <= 0) {
+    ctx.strokeStyle = C.border; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI*2); ctx.stroke();
+    ctx.fillStyle = C.muted; ctx.font = '12px Sora';
+    ctx.textAlign = 'center'; ctx.fillText('No data', cx, cy+4);
+    return;
+  }
+
+  const slices = [
+    { value: totalCost,   color: C.red,   label: 'วัตถุดิบ' },
+    { value: totalHidden > 0 ? totalHidden : 0, color: C.gold,  label: 'แฝง' },
+    { value: netProfit > 0 ? netProfit : 0, color: C.green, label: 'กำไร' }
+  ].filter(s => s.value > 0);
+
+  let angle = -Math.PI / 2;
+  slices.forEach(s => {
+    const sweep = (s.value / total) * Math.PI * 2;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.arc(cx, cy, r, angle, angle + sweep);
+    ctx.closePath();
+    ctx.fillStyle = s.color;
+    ctx.fill();
+    const mid = angle + sweep / 2;
+    const lx = cx + Math.cos(mid) * (r * 0.65);
+    const ly = cy + Math.sin(mid) * (r * 0.65);
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 11px Sora';
+    ctx.textAlign = 'center';
+    const pct = (s.value/total*100).toFixed(0)+'%';
+    ctx.fillText(pct, lx, ly+4);
+    angle += sweep;
+  });
+
+  // Donut hole
+  ctx.beginPath(); ctx.arc(cx,cy,r*0.48,0,Math.PI*2);
+  ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--surface').trim() || '#1a1a1a';
+  ctx.fill();
+
+  // Legend - horizontal at bottom
+  ctx.textAlign = 'left';
+  const legW = size / slices.length;
+  slices.forEach((s,i) => {
+    const lx = i * legW + 4;
+    const ly = size - 8;
+    ctx.fillStyle = s.color; ctx.fillRect(lx, ly-9, 9, 9);
+    ctx.fillStyle = C.muted; ctx.font = '9px Sora';
+    ctx.fillText(s.label, lx+12, ly);
+  });
+}
+
+/* ═══════════════════════════════════════════════════════════
+   SALES PAGE
+═══════════════════════════════════════════════════════════ */
+function renderSalesPage() {
+  // Populate dropdown
+  const sel = document.getElementById('saleMenu');
+  sel.innerHTML = state.menuItems.map(m =>
+    `<option value="${m.id}">${m.name} — ${fmt(m.price)}</option>`
+  ).join('') || '<option value="">ยังไม่มีเมนู</option>';
+
+  // Set default date to today
+  if (!document.getElementById('saleDate').value)
+    document.getElementById('saleDate').value = today();
+
+  updateSalePreview();
+  renderSalesTable();
+}
+
+function updateSalePreview() {
+  const menuId = document.getElementById('saleMenu').value;
+  const qty    = parseInt(document.getElementById('saleQty').value) || 0;
+  const menu   = state.menuItems.find(m => m.id === menuId);
+  if (!menu || qty < 1) { document.getElementById('saleSummary').style.display='none'; return; }
+  const cost    = menuItemCost(menu);
+  const revenue = menu.price * qty;
+  const profit  = revenue - cost * qty;
+  document.getElementById('saleSummary').style.display = 'flex';
+  document.getElementById('saleSummary').innerHTML = `
+    <div class="summary-item"><span class="s-label">Revenue</span><span class="s-val text-blue">${fmt(revenue)}</span></div>
+    <div class="summary-item"><span class="s-label">Cost</span><span class="s-val text-red">${fmt(cost*qty)}</span></div>
+    <div class="summary-item"><span class="s-label">Profit</span><span class="s-val text-green">${fmt(profit)}</span></div>
+    <div class="summary-item"><span class="s-label">Unit Cost</span><span class="s-val text-muted">${fmt(cost)}</span></div>`;
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('saleMenu').addEventListener('change', updateSalePreview);
+  document.getElementById('saleQty').addEventListener('input', updateSalePreview);
+});
+
+function addSale() {
+  const date   = document.getElementById('saleDate').value;
+  const menuId = document.getElementById('saleMenu').value;
+  const qty    = parseInt(document.getElementById('saleQty').value);
+  if (!date)   return toast('กรุณาเลือกวันที่', 'error');
+  if (!menuId) return toast('กรุณาเลือกเมนู', 'error');
+  if (!qty || qty < 1) return toast('จำนวนต้องมากกว่า 0', 'error');
+  state.sales.push({ id: uid(), date, menuId, qty });
+  saveState();
+  document.getElementById('saleQty').value = '';
+  document.getElementById('saleSummary').style.display = 'none';
+  renderSalesTable();
+  toast('บันทึกยอดขายแล้ว ✓');
+}
+
+function renderSalesTable() {
+  const df = document.getElementById('salesFilterDate').value || null;
+  let sales = filteredSales(df);
+  sales = [...sales].sort((a,b) => b.date.localeCompare(a.date) || 0);
+
+  if (!sales.length) {
+    document.getElementById('salesTable').innerHTML = emptyState('ยังไม่มีรายการขาย');
+    return;
+  }
+  document.getElementById('salesTable').innerHTML = `
+    <table class="data-table">
+      <thead><tr><th>วันที่</th><th>ชื่อเมนู</th><th>หน่วย</th><th>ยอดขาย</th><th>ต้นทุน*</th><th>กำไร</th><th></th></tr></thead>
+      <tbody>
+        ${sales.map(s => {
+          const menu = state.menuItems.find(m => m.id === s.menuId);
+          if (!menu) return '';
+          const cost = menuItemCost(menu) * s.qty;
+          const rev  = menu.price * s.qty;
+          return `<tr>
+            <td class="mono text-muted" style="font-size:12px">${s.date}</td>
+            <td>${menu.name}</td>
+            <td><span class="badge badge-blue mono">${s.qty}</span></td>
+            <td class="mono text-blue">${fmt(rev)}</td>
+            <td class="mono text-red">${fmt(cost)}</td>
+            <td class="mono text-green">${fmt(rev-cost)}</td>
+            <td><button class="btn-icon del" onclick="deleteSale('${s.id}')">✕</button></td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>`;
+}
+
+function deleteSale(id) {
+  confirm('ลบรายการขายนี้?', () => {
+    state.sales = state.sales.filter(s => s.id !== id);
+    saveState(); renderSalesTable(); toast('ลบแล้ว');
+  });
+}
+
+function clearSalesFilter() {
+  document.getElementById('salesFilterDate').value = '';
+  renderSalesTable();
+}
+
+/* ═══════════════════════════════════════════════════════════
+   MENU PAGE
+═══════════════════════════════════════════════════════════ */
+function renderMenuPage() {
+  // Populate ingredient select
+  const sel = document.getElementById('ingSelect');
+  sel.innerHTML = state.ingredients.map(i =>
+    `<option value="${i.id}">${i.name} (${i.unit})</option>`
+  ).join('') || '<option value="">ยังไม่มีวัตถุดิบ</option>';
+
+  if (editingMenuId === null) {
+    tempMenuIngs = [];
+    renderTempIngList();
+  }
+  renderMenuTable();
+}
+
+function addIngToMenu() {
+  const ingId = document.getElementById('ingSelect').value;
+  const qty   = parseFloat(document.getElementById('ingQty').value);
+  if (!ingId) return toast('กรุณาเลือกวัตถุดิบ', 'error');
+  if (!qty || qty <= 0) return toast('กรุณาใส่จำนวนที่ถูกต้อง', 'error');
+  // Remove if already in list, then add
+  tempMenuIngs = tempMenuIngs.filter(i => i.id !== ingId);
+  tempMenuIngs.push({ id: ingId, qty });
+  document.getElementById('ingQty').value = '';
+  renderTempIngList();
+  updateMenuCostPreview();
+}
+
+function renderTempIngList() {
+  const list = document.getElementById('menuIngList');
+  if (!tempMenuIngs.length) { list.innerHTML = ''; return; }
+  list.innerHTML = tempMenuIngs.map(ing => {
+    const ingData = state.ingredients.find(i => i.id === ing.id);
+    if (!ingData) return '';
+    return `<div class="ing-tag">
+      <span>${ingData.name}</span>
+      <span class="mono text-muted" style="font-size:11px">${ing.qty} ${ingData.unit}</span>
+      <span class="remove-ing" onclick="removeIngFromMenu('${ing.id}')">✕</span>
+    </div>`;
+  }).join('');
+}
+
+function removeIngFromMenu(ingId) {
+  tempMenuIngs = tempMenuIngs.filter(i => i.id !== ingId);
+  renderTempIngList();
+  updateMenuCostPreview();
+}
+
+function updateMenuCostPreview() {
+  const cost = tempMenuIngs.reduce((sum, ing) => {
+    const d = state.ingredients.find(i => i.id === ing.id);
+    return sum + (d ? d.cost * ing.qty : 0);
+  }, 0);
+  document.getElementById('menuCostPreview').textContent = fmt(cost);
+}
+
+function saveMenuItem() {
+  const name  = document.getElementById('menuName').value.trim();
+  const price = parseFloat(document.getElementById('menuPrice').value);
+  if (!name)  return toast('กรุณาใส่ชื่อเมนู', 'error');
+  if (!price || price <= 0) return toast('กรุณาใส่ราคาขายที่ถูกต้อง', 'error');
+  if (!tempMenuIngs.length) return toast('กรุณาเพิ่มวัตถุดิบอย่างน้อย 1 รายการ', 'error');
+
+  if (editingMenuId) {
+    const item = state.menuItems.find(m => m.id === editingMenuId);
+    item.name = name; item.price = price; item.ingredients = [...tempMenuIngs];
+    toast('อัปเดตเมนูแล้ว ✓');
+  } else {
+    state.menuItems.push({ id: uid(), name, price, ingredients: [...tempMenuIngs] });
+    toast('เพิ่มเมนูแล้ว ✓');
+  }
+  cancelMenuEdit();
+  saveState(); renderMenuTable();
+}
+
+function editMenuItem(id) {
+  const item = state.menuItems.find(m => m.id === id);
+  if (!item) return;
+  editingMenuId = id;
+  tempMenuIngs  = [...item.ingredients.map(i => ({...i}))];
+  document.getElementById('menuName').value  = item.name;
+  document.getElementById('menuPrice').value = item.price;
+  document.getElementById('menuFormTitle').textContent = 'แก้ไขเมนู';
+  document.getElementById('cancelMenuBtn').style.display = '';
+  renderTempIngList(); updateMenuCostPreview();
+  document.getElementById('page-menu').scrollTop = 0;
+}
+
+function cancelMenuEdit() {
+  editingMenuId = null; tempMenuIngs = [];
+  document.getElementById('menuName').value  = '';
+  document.getElementById('menuPrice').value = '';
+  document.getElementById('menuFormTitle').textContent = 'เพิ่มเมนู';
+  document.getElementById('cancelMenuBtn').style.display = 'none';
+  renderTempIngList(); updateMenuCostPreview();
+}
+
+function deleteMenuItem(id) {
+  confirm('ลบเมนูนี้? รายการขายที่เกี่ยวข้องจะยังคงอยู่', () => {
+    state.menuItems = state.menuItems.filter(m => m.id !== id);
+    saveState(); renderMenuTable(); toast('ลบแล้ว');
+  });
+}
+
+function copyMenuItem(id) {
+  const item = state.menuItems.find(m => m.id === id);
+  if (!item) return;
+  // Load the item into the form for editing (clone)
+  editingMenuId = null; // treat as new
+  tempMenuIngs = item.ingredients.map(i => ({...i}));
+  document.getElementById('menuName').value  = item.name + ' (สำเนา)';
+  document.getElementById('menuPrice').value = item.price;
+  document.getElementById('menuFormTitle').textContent = 'คัดลอกเมนู — แก้ไขแล้วกด บันทึก';
+  document.getElementById('cancelMenuBtn').style.display = '';
+  renderTempIngList(); updateMenuCostPreview();
+  document.getElementById('page-menu').scrollTop = 0;
+  toast('โหลดเมนูแล้ว — แก้ไขชื่อ/ราคา แล้วกดบันทึก ✓');
+}
+
+function renderMenuTable() {
+  if (!state.menuItems.length) {
+    document.getElementById('menuTable').innerHTML = emptyState('ยังไม่มีเมนู');
+    return;
+  }
+  document.getElementById('menuTable').innerHTML = `
+    <table class="data-table">
+      <thead><tr><th>เมนู</th><th>ราคาขาย/หน่วย</th><th>ต้นทุนวัตถุดิบ</th><th>สัดส่วนกำไร</th><th>รายการวัตถุดิบ</th><th></th></tr></thead>
+      <tbody>
+        ${state.menuItems.map(m => {
+          const cost   = menuItemCost(m);
+          const margin = m.price > 0 ? ((m.price - cost) / m.price * 100) : 0;
+          const ings   = m.ingredients.map(ing => {
+            const d = state.ingredients.find(i => i.id === ing.id);
+            return d ? `<span class="ing-tag" style="margin:0">${d.name} ×${ing.qty}</span>` : '';
+          }).join('');
+          return `<tr>
+            <td style="font-weight:600">${m.name}</td>
+            <td class="mono text-blue">${fmt(m.price)}</td>
+            <td class="mono text-red">${fmt(cost)}</td>
+            <td>
+              <span class="mono" style="font-size:12px;color:var(--${margin>50?'green':margin>25?'gold':'red'})">${margin.toFixed(1)}%</span>
+              <div class="margin-bar"><div class="margin-fill" style="width:${Math.max(0,margin)}%;background:var(--${margin>50?'green':margin>25?'gold':'red'})"></div></div>
+            </td>
+            <td><div style="display:flex;flex-wrap:wrap;gap:4px">${ings}</div></td>
+            <td style="white-space:nowrap">
+              <button class="btn-icon" title="คัดลอกเมนู" onclick="copyMenuItem('${m.id}')">⧉</button>
+              <button class="btn-icon" onclick="editMenuItem('${m.id}')">✎</button>
+              <button class="btn-icon del" onclick="deleteMenuItem('${m.id}')">✕</button>
+            </td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>`;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   INGREDIENTS PAGE
+═══════════════════════════════════════════════════════════ */
+function renderIngredientsPage() {
+  renderIngredientTable();
+}
+
+function saveIngredient() {
+  const name = document.getElementById('ingName').value.trim();
+  const cost = parseFloat(document.getElementById('ingCost').value);
+  const unit = document.getElementById('ingUnit').value;
+  if (!name) return toast('กรุณาใส่ชื่อวัตถุดิบ', 'error');
+  if (!cost || cost < 0) return toast('กรุณาใส่ราคาที่ถูกต้อง', 'error');
+
+  if (editingIngId) {
+    const ing = state.ingredients.find(i => i.id === editingIngId);
+    ing.name = name; ing.cost = cost; ing.unit = unit;
+    toast('อัปเดตวัตถุดิบแล้ว ✓');
+  } else {
+    state.ingredients.push({ id: uid(), name, cost, unit });
+    toast('เพิ่มวัตถุดิบแล้ว ✓');
+  }
+  cancelIngEdit();
+  saveState(); renderIngredientTable();
+  // Refresh menu page ingredient select if open
+  const ingSel = document.getElementById('ingSelect');
+  if (ingSel) {
+    ingSel.innerHTML = state.ingredients.map(i =>
+      `<option value="${i.id}">${i.name} (${i.unit})</option>`
+    ).join('');
+  }
+}
+
+function editIngredient(id) {
+  const ing = state.ingredients.find(i => i.id === id);
+  if (!ing) return;
+  editingIngId = id;
+  document.getElementById('ingName').value = ing.name;
+  document.getElementById('ingCost').value = ing.cost;
+  document.getElementById('ingUnit').value = ing.unit;
+  document.getElementById('ingFormTitle').textContent = 'แก้ไขวัตถุดิบ';
+  document.getElementById('cancelIngBtn').style.display = '';
+  document.getElementById('page-ingredients').scrollTop = 0;
+}
+
+function cancelIngEdit() {
+  editingIngId = null;
+  document.getElementById('ingName').value = '';
+  document.getElementById('ingCost').value = '';
+  document.getElementById('ingUnit').value = 'kg';
+  document.getElementById('ingFormTitle').textContent = 'เพิ่มรายการวัตถุดิบ';
+  document.getElementById('cancelIngBtn').style.display = 'none';
+}
+
+function deleteIngredient(id) {
+  const usedIn = state.menuItems.filter(m => m.ingredients.some(i => i.id === id));
+  if (usedIn.length) {
+    return toast(`ใช้อยู่ใน ${usedIn.length} เมนู — กรุณาลบออกจากเมนูก่อน`, 'error');
+  }
+  confirm('ลบวัตถุดิบนี้?', () => {
+    state.ingredients = state.ingredients.filter(i => i.id !== id);
+    saveState(); renderIngredientTable(); toast('ลบแล้ว');
+  });
+}
+
+function renderIngredientTable() {
+  if (!state.ingredients.length) {
+    document.getElementById('ingredientTable').innerHTML = emptyState('ยังไม่มีวัตถุดิบ');
+    return;
+  }
+  document.getElementById('ingredientTable').innerHTML = `
+    <table class="data-table">
+      <thead><tr><th>ชื่อวัตถุดิบ</th><th>ราคา/หน่วย</th><th>หน่วย</th><th>ถูกใช้</th><th></th></tr></thead>
+      <tbody>
+        ${state.ingredients.map(ing => {
+          const menuCount = state.menuItems.filter(m => m.ingredients.some(i => i.id === ing.id)).length;
+          return `<tr>
+            <td style="font-weight:500">${ing.name}</td>
+            <td class="mono text-red">${fmt(ing.cost)}</td>
+            <td><span class="badge badge-blue">${ing.unit}</span></td>
+            <td class="text-muted" style="font-size:12.5px">${menuCount ? menuCount + ' เมนู' : '—'}</td>
+            <td style="white-space:nowrap">
+              <button class="btn-icon" onclick="editIngredient('${ing.id}')">✎</button>
+              <button class="btn-icon del" onclick="deleteIngredient('${ing.id}')">✕</button>
+            </td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>`;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   UI UTILITIES
+═══════════════════════════════════════════════════════════ */
+function emptyState(msg) {
+  return `<div class="empty-state"><div class="empty-icon">📭</div><p>${msg}</p></div>`;
+}
+
+let toastTimer;
+function toast(msg, type = 'success') {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'show ' + type;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.className = '', 2800);
+}
+
+let confirmCallback;
+function confirm(msg, cb) {
+  confirmCallback = cb;
+  document.getElementById('confirmBody').textContent = msg;
+  document.getElementById('confirmModal').classList.add('open');
+}
+function closeConfirm() {
+  document.getElementById('confirmModal').classList.remove('open');
+  confirmCallback = null;
+}
+document.getElementById('confirmOkBtn').onclick = () => {
+  if (confirmCallback) confirmCallback();
+  closeConfirm();
+};
+document.getElementById('confirmModal').addEventListener('click', e => {
+  if (e.target === e.currentTarget) closeConfirm();
+});
+
+function confirmReset() {
+  confirm('การดำเนินการนี้จะลบข้อมูลทั้งหมด (วัตถุดิบ, เมนู, ยอดขาย) อย่างถาวร ไม่สามารถย้อนกลับได้', () => {
+    state.ingredients = []; state.menuItems = []; state.sales = []; state.hiddenCosts = [];
+    saveState();
+    showPage('dashboard');
+    toast('รีเซ็ตข้อมูลทั้งหมดแล้ว', 'error');
+  });
+  document.getElementById('confirmTitle').textContent = '⚠️ รีเซ็ตข้อมูลทั้งหมด';
+  document.getElementById('confirmOkBtn').textContent = 'ยืนยัน รีเซ็ตทั้งหมด';
+}
+
+/* ─── THEME ─────────────────────────────────────────────── */
+function toggleTheme() {
+  const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+  document.documentElement.setAttribute('data-theme', isLight ? '' : 'light');
+  document.getElementById('themeIcon').textContent = isLight ? '☀️' : '🌙';
+  localStorage.setItem('rl_theme', isLight ? '' : 'light');
+  // Re-render charts with new colors
+  setTimeout(() => renderDashboard(), 50);
+}
+
+/* ─── EXPORT / IMPORT ───────────────────────────────────── */
+function exportData() {
+  const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url;
+  a.download = `restaurant-ledger-${today()}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+  toast('ส่งออกข้อมูลแล้ว ✓');
+}
+
+function importData(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      const data = JSON.parse(e.target.result);
+      if (!data.ingredients || !data.menuItems || !data.sales)
+        throw new Error('Invalid file format');
+      if (!data.hiddenCosts) data.hiddenCosts = [];
+      state = data;
+      saveState();
+      showPage('dashboard');
+      toast('นำเข้าข้อมูลแล้ว ✓');
+    } catch(err) {
+      toast('ไฟล์ไม่ถูกต้อง: ' + err.message, 'error');
+    }
+    event.target.value = '';
+  };
+  reader.readAsText(file);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   HIDDEN COSTS PAGE
+═══════════════════════════════════════════════════════════ */
+let editingHcId = null;
+
+function renderHiddenCostsPage() {
+  renderHcSummary();
+  renderHcTable();
+}
+
+function renderHcSummary() {
+  if (!state.hiddenCosts) state.hiddenCosts = [];
+  const daily = dailyHiddenCost();
+  document.getElementById('hcSummary').innerHTML = `
+    <div class="summary-item"><span class="s-label">ต้นทุนแฝง/วัน</span><span class="s-val" style="color:var(--gold)">${fmt(daily)}</span></div>
+    <div class="summary-item"><span class="s-label">ต้นทุนแฝง/เดือน (×30)</span><span class="s-val" style="color:var(--gold)">${fmt(daily*30)}</span></div>
+    <div class="summary-item"><span class="s-label">รายการ</span><span class="s-val text-muted">${state.hiddenCosts.length} รายการ</span></div>
+  `;
+}
+
+function saveHiddenCost() {
+  if (!state.hiddenCosts) state.hiddenCosts = [];
+  const name   = document.getElementById('hcName').value.trim();
+  const amount = parseFloat(document.getElementById('hcAmount').value);
+  const type   = document.getElementById('hcType').value;
+  if (!name)   return toast('กรุณาใส่ชื่อรายการ', 'error');
+  if (!amount || amount <= 0) return toast('กรุณาใส่จำนวนเงินที่ถูกต้อง', 'error');
+
+  if (editingHcId) {
+    const hc = state.hiddenCosts.find(h => h.id === editingHcId);
+    hc.name = name; hc.amount = amount; hc.type = type;
+    toast('อัปเดตรายการแล้ว ✓');
+  } else {
+    state.hiddenCosts.push({ id: uid(), name, amount, type });
+    toast('เพิ่มต้นทุนแฝงแล้ว ✓');
+  }
+  cancelHcEdit();
+  saveState(); renderHiddenCostsPage();
+}
+
+function editHiddenCost(id) {
+  const hc = state.hiddenCosts.find(h => h.id === id);
+  if (!hc) return;
+  editingHcId = id;
+  document.getElementById('hcName').value   = hc.name;
+  document.getElementById('hcAmount').value = hc.amount;
+  document.getElementById('hcType').value   = hc.type;
+  document.getElementById('hcFormTitle').textContent = 'แก้ไขต้นทุนแฝง';
+  document.getElementById('cancelHcBtn').style.display = '';
+  document.getElementById('page-hiddencosts').scrollTop = 0;
+}
+
+function cancelHcEdit() {
+  editingHcId = null;
+  document.getElementById('hcName').value   = '';
+  document.getElementById('hcAmount').value = '';
+  document.getElementById('hcType').value   = 'daily';
+  document.getElementById('hcFormTitle').textContent = 'เพิ่มต้นทุนแฝง';
+  document.getElementById('cancelHcBtn').style.display = 'none';
+}
+
+function deleteHiddenCost(id) {
+  confirm('ลบรายการต้นทุนแฝงนี้?', () => {
+    state.hiddenCosts = state.hiddenCosts.filter(h => h.id !== id);
+    saveState(); renderHiddenCostsPage(); toast('ลบแล้ว');
+  });
+}
+
+function renderHcTable() {
+  if (!state.hiddenCosts) state.hiddenCosts = [];
+  if (!state.hiddenCosts.length) {
+    document.getElementById('hcTable').innerHTML = emptyState('ยังไม่มีต้นทุนแฝง — เพิ่มค่าใช้จ่ายเช่น ค่าเช่า ค่าไฟ ค่าแรง');
+    return;
+  }
+  const typeLabel = { daily: 'รายวัน', monthly: 'รายเดือน (÷30)', fixed: 'ครั้งเดียว' };
+  document.getElementById('hcTable').innerHTML = `
+    <table class="data-table">
+      <thead><tr><th>รายการ</th><th>จำนวนเงิน</th><th>ประเภท</th><th>เฉลี่ย/วัน</th><th></th></tr></thead>
+      <tbody>
+        ${state.hiddenCosts.map(hc => {
+          const perDay = hc.type === 'monthly' ? hc.amount/30 : hc.amount;
+          return `<tr>
+            <td style="font-weight:500">${hc.name}</td>
+            <td class="mono" style="color:var(--gold)">${fmt(hc.amount)}</td>
+            <td><span class="badge" style="background:var(--gold-dim);color:var(--gold)">${typeLabel[hc.type]||hc.type}</span></td>
+            <td class="mono text-muted">${fmt(perDay)}</td>
+            <td style="white-space:nowrap">
+              <button class="btn-icon" onclick="editHiddenCost('${hc.id}')">✎</button>
+              <button class="btn-icon del" onclick="deleteHiddenCost('${hc.id}')">✕</button>
+            </td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>`;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   INIT
+═══════════════════════════════════════════════════════════ */
+// Restore theme
+const savedTheme = localStorage.getItem('rl_theme');
+if (savedTheme === 'light') {
+  document.documentElement.setAttribute('data-theme', 'light');
+  document.getElementById('themeIcon').textContent = '🌙';
+}
+
+// Re-render charts on resize
+let resizeTimer;
+window.addEventListener('resize', () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    if (document.getElementById('page-dashboard').classList.contains('active'))
+      renderDashboard();
+  }, 200);
+});
+</script>
+</body>
+</html>
