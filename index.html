@@ -6,14 +6,13 @@
 <title>กำไร-GumRai</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Sora:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-<!-- Firebase SDK -->
-<script type="module">
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
-import { getFirestore, doc, setDoc, getDoc, onSnapshot, collection, deleteDoc } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
-
+<!-- Firebase SDK (compat version — no module needed) -->
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script>
 // ══════════════════════════════════════════════
-//  🔥 Firebase Config — ของคุณโดยเฉพาะ
+//  🔥 Firebase Config
 // ══════════════════════════════════════════════
 const firebaseConfig = {
   apiKey: "AIzaSyD5Khyh1GKJcdaHTXGhFxpxrXoZ9W1w5BQ",
@@ -23,18 +22,15 @@ const firebaseConfig = {
   messagingSenderId: "1068998857459",
   appId: "1:1068998857459:web:81d3b0fc81bb473859dd86"
 };
+firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
+const db   = firebase.firestore();
 
-const app  = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db   = getFirestore(app);
-
-// ══════════════════════════════════════════════
-//  Auth State
-// ══════════════════════════════════════════════
 let currentUser = null;
 let unsubscribeSnapshot = null;
 
-onAuthStateChanged(auth, async user => {
+// ── Auth state listener ──────────────────────
+auth.onAuthStateChanged(user => {
   if (user) {
     currentUser = user;
     document.getElementById('loginScreen').style.display = 'none';
@@ -49,107 +45,94 @@ onAuthStateChanged(auth, async user => {
   }
 });
 
-// ══════════════════════════════════════════════
-//  Firestore Sync — realtime listener
-// ══════════════════════════════════════════════
+// ── Firestore realtime sync ──────────────────
 function startFirestoreSync(uid) {
-  const docRef = doc(db, 'restaurants', uid);
-  unsubscribeSnapshot = onSnapshot(docRef, snap => {
-    if (snap.exists()) {
+  const docRef = db.collection('restaurants').doc(uid);
+  unsubscribeSnapshot = docRef.onSnapshot(snap => {
+    if (snap.exists) {
       const data = snap.data();
-      window.state.ingredients = data.ingredients || [];
-      window.state.menuItems   = data.menuItems   || [];
-      window.state.sales       = data.sales        || [];
-      window.state.hiddenCosts = data.hiddenCosts  || [];
+      state.ingredients = data.ingredients || [];
+      state.menuItems   = data.menuItems   || [];
+      state.sales       = data.sales       || [];
+      state.hiddenCosts = data.hiddenCosts || [];
     } else {
-      // New user — load sample data then save
-      window.loadSampleData();
-      window.pushToFirestore();
+      loadSampleData();
+      pushToFirestore();
     }
-    // Re-render current page
+    // Re-render
     const active = document.querySelector('.page.active');
     if (active) {
       const name = active.id.replace('page-','');
-      window.showPage(name);
+      showPage(name);
+    } else {
+      showPage('dashboard');
     }
     // Set dates
     const sd = document.getElementById('saleDate');
     const fd = document.getElementById('filterDate');
-    if (sd && !sd.value) sd.value = window.todayStr();
-    if (fd) fd.value = window.todayStr();
+    if (sd && !sd.value) sd.value = todayStr();
+    if (fd && !fd.value) fd.value = todayStr();
   }, err => {
     console.error('Firestore error:', err);
-    window.toast('ไม่สามารถเชื่อมต่อ database ได้', 'error');
+    toast('ไม่สามารถเชื่อมต่อ database: ' + err.message, 'error');
   });
 }
 
-// ══════════════════════════════════════════════
-//  Push state to Firestore
-// ══════════════════════════════════════════════
-window.pushToFirestore = async function() {
+// ── Push to Firestore ────────────────────────
+function pushToFirestore() {
   if (!currentUser) return;
-  try {
-    await setDoc(doc(db, 'restaurants', currentUser.uid), {
-      ingredients: window.state.ingredients,
-      menuItems:   window.state.menuItems,
-      sales:       window.state.sales,
-      hiddenCosts: window.state.hiddenCosts,
-      updatedAt:   new Date().toISOString()
-    });
-  } catch(e) {
-    window.toast('บันทึกไม่สำเร็จ: ' + e.message, 'error');
-  }
-};
+  db.collection('restaurants').doc(currentUser.uid).set({
+    ingredients: state.ingredients,
+    menuItems:   state.menuItems,
+    sales:       state.sales,
+    hiddenCosts: state.hiddenCosts,
+    updatedAt:   new Date().toISOString()
+  }).catch(e => toast('บันทึกไม่สำเร็จ: ' + e.message, 'error'));
+}
 
-// ══════════════════════════════════════════════
-//  Auth Actions (exposed to global)
-// ══════════════════════════════════════════════
-window.doLogin = async function() {
+// ── Auth actions ─────────────────────────────
+function doLogin() {
   const email = document.getElementById('loginEmail').value.trim();
   const pass  = document.getElementById('loginPass').value;
   const errEl = document.getElementById('loginError');
   errEl.textContent = '';
   if (!email || !pass) { errEl.textContent = 'กรุณากรอกอีเมลและรหัสผ่าน'; return; }
-  try {
-    document.getElementById('loginBtn').textContent = 'กำลังเข้าสู่ระบบ...';
-    await signInWithEmailAndPassword(auth, email, pass);
-  } catch(e) {
+  document.getElementById('loginBtn').textContent = 'กำลังเข้าสู่ระบบ...';
+  auth.signInWithEmailAndPassword(email, pass).catch(e => {
     const msg = e.code === 'auth/invalid-credential' ? 'อีเมลหรือรหัสผ่านไม่ถูกต้อง'
+              : e.code === 'auth/user-not-found'     ? 'ไม่พบบัญชีนี้'
+              : e.code === 'auth/wrong-password'     ? 'รหัสผ่านไม่ถูกต้อง'
               : e.code === 'auth/too-many-requests'  ? 'ลองใหม่อีกครั้งในภายหลัง'
               : e.message;
     errEl.textContent = msg;
     document.getElementById('loginBtn').textContent = 'เข้าสู่ระบบ';
-  }
-};
+  });
+}
 
-window.doRegister = async function() {
+function doRegister() {
   const email = document.getElementById('loginEmail').value.trim();
   const pass  = document.getElementById('loginPass').value;
   const errEl = document.getElementById('loginError');
   errEl.textContent = '';
   if (!email || !pass) { errEl.textContent = 'กรุณากรอกอีเมลและรหัสผ่าน'; return; }
   if (pass.length < 6) { errEl.textContent = 'รหัสผ่านต้องมีอย่างน้อย 6 ตัวอักษร'; return; }
-  try {
-    document.getElementById('registerBtn').textContent = 'กำลังสร้างบัญชี...';
-    await createUserWithEmailAndPassword(auth, email, pass);
-  } catch(e) {
+  document.getElementById('registerBtn').textContent = 'กำลังสร้างบัญชี...';
+  auth.createUserWithEmailAndPassword(email, pass).catch(e => {
     const msg = e.code === 'auth/email-already-in-use' ? 'อีเมลนี้ถูกใช้แล้ว'
               : e.code === 'auth/invalid-email'        ? 'รูปแบบอีเมลไม่ถูกต้อง'
               : e.message;
     errEl.textContent = msg;
     document.getElementById('registerBtn').textContent = 'สร้างบัญชีใหม่';
-  }
-};
+  });
+}
 
-window.doLogout = async function() {
-  await signOut(auth);
-  window.toast('ออกจากระบบแล้ว');
-};
+function doLogout() {
+  auth.signOut();
+}
 
-// Enter key on login
 document.addEventListener('DOMContentLoaded', () => {
-  document.getElementById('loginPass').addEventListener('keydown', e => {
-    if (e.key === 'Enter') window.doLogin();
+  document.getElementById('loginPass')?.addEventListener('keydown', e => {
+    if (e.key === 'Enter') doLogin();
   });
 });
 </script>
@@ -1077,8 +1060,7 @@ function loadState() {
 }
 
 function saveState() {
-  // Push to Firestore (defined in module script above)
-  if (window.pushToFirestore) window.pushToFirestore();
+  pushToFirestore();
 }
 
 function uid() {
@@ -1139,12 +1121,8 @@ const fmt = n => '฿' + (+n).toLocaleString('en',{minimumFractionDigits:2,maxim
 const todayStr = () => new Date().toISOString().slice(0,10);
 const today = todayStr; // alias
 
-// Expose to module script
-window.state        = state;
-window.showPage     = (...a) => showPage(...a);
-window.loadSampleData = (...a) => loadSampleData(...a);
-window.todayStr     = todayStr;
-window.toast        = (...a) => toast(...a);
+// Expose to module script (not needed with compat SDK but kept for safety)
+window.state = state;
 
 /** Calculate ingredient cost for a menu item */
 function menuItemCost(item) {
