@@ -266,7 +266,31 @@ table { border-collapse: collapse; width: 100%; }
 .sidebar-btn:hover { background: var(--surface2); color: var(--text); }
 .sidebar-btn.danger:hover { background: var(--red-dim); color: var(--red); }
 
-/* ─── MAIN CONTENT ──────────────────────────────────────── */
+/* ─── SIDEBAR COLLAPSE ───────────────────────────────────── */
+#sidebar { transition: width .22s ease; }
+#sidebar.collapsed { width: 56px; }
+#sidebar.collapsed .sidebar-logo .brand-text,
+#sidebar.collapsed .sidebar-logo .tagline,
+#sidebar.collapsed .nav-section,
+#sidebar.collapsed .nav-item span:last-child,
+#sidebar.collapsed .sidebar-btn span:last-child,
+#sidebar.collapsed #userEmail { display: none; }
+#sidebar.collapsed .nav-item { justify-content: center; padding: 10px; margin: 2px 4px; }
+#sidebar.collapsed .nav-item .nav-icon { width: auto; font-size: 18px; }
+#sidebar.collapsed .sidebar-footer { padding: 8px 4px; align-items: center; }
+#sidebar.collapsed .sidebar-btn { justify-content: center; padding: 8px; width: 40px; }
+#sidebar.collapsed .sidebar-logo { padding: 14px 8px; display: flex; justify-content: center; }
+#sidebar.collapsed #toggleSidebar { margin: 0 auto; }
+#sidebar.collapsed .sidebar-logo .brand-icon { margin: 0; }
+
+#toggleSidebar {
+  background: none; border: none; cursor: pointer;
+  color: var(--muted); font-size: 16px; padding: 4px 6px;
+  border-radius: 6px; transition: background .15s;
+  margin-left: auto; display: block;
+}
+#toggleSidebar:hover { background: var(--surface2); color: var(--text); }
+
 #main {
   flex: 1;
   overflow-y: auto;
@@ -577,7 +601,13 @@ canvas { display: block; }
 @media (max-width: 768px) {
   :root { --sidebar: 56px; }
   #sidebar { width: 56px; }
-  .sidebar-logo, .nav-section, .nav-item span, .sidebar-btn span { display: none; }
+  #sidebar:not(.collapsed) { width: 200px; }
+  .sidebar-logo .brand-text, .nav-section, .nav-item span:last-child,
+  .sidebar-btn span:last-child, #userEmail { display: none; }
+  #sidebar:not(.collapsed) .brand-text,
+  #sidebar:not(.collapsed) .nav-section,
+  #sidebar:not(.collapsed) .nav-item span:last-child,
+  #sidebar:not(.collapsed) .sidebar-btn span:last-child { display: inline; }
   .nav-item { justify-content: center; padding: 10px; margin: 2px 4px; }
   .nav-item .nav-icon { width: auto; font-size: 18px; }
   .sidebar-footer { padding: 8px 4px; }
@@ -686,7 +716,7 @@ canvas { display: block; }
 <!-- ─── LOGIN SCREEN ───────────────────────────────────── -->
 <div id="loginScreen" style="display:none">
   <div class="login-box">
-    <div class="login-logo">🍽 กำไร-GumRai</div>
+    <div class="login-logo">🍽 GumRai</div>
     <div class="login-sub">ระบบคำนวณต้นทุน-กำไรร้านอาหาร</div>
     <div class="login-field">
       <label>อีเมล</label>
@@ -710,7 +740,9 @@ canvas { display: block; }
   <!-- ─── SIDEBAR ─────────────────────────────────────── -->
   <nav id="sidebar">
     <div class="sidebar-logo">
-      <div class="brand">🍽 RestaurantLedger</div>
+      <span class="brand-icon">🍽</span>
+      <span class="brand brand-text"> RestaurantLedger</span>
+      <button id="toggleSidebar" onclick="toggleSidebar()" title="พับ/ขยายเมนู">◀</button>
     </div>
 
     <div class="nav-section">Main</div>
@@ -1813,7 +1845,22 @@ function confirmReset() {
 }
 
 /* ─── THEME ─────────────────────────────────────────────── */
-function toggleTheme() {
+function toggleSidebar() {
+  const sb  = document.getElementById('sidebar');
+  const btn = document.getElementById('toggleSidebar');
+  sb.classList.toggle('collapsed');
+  btn.textContent = sb.classList.contains('collapsed') ? '▶' : '◀';
+  localStorage.setItem('sidebar_collapsed', sb.classList.contains('collapsed'));
+}
+
+// Restore sidebar state on load
+document.addEventListener('DOMContentLoaded', () => {
+  if (localStorage.getItem('sidebar_collapsed') === 'true') {
+    document.getElementById('sidebar').classList.add('collapsed');
+    document.getElementById('toggleSidebar').textContent = '▶';
+  }
+});
+
   const isLight = document.documentElement.getAttribute('data-theme') === 'light';
   document.documentElement.setAttribute('data-theme', isLight ? '' : 'light');
   document.getElementById('themeIcon').textContent = isLight ? '☀️' : '🌙';
